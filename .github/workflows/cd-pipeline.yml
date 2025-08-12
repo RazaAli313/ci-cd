@@ -3,7 +3,7 @@ name: Build and Deploy to Azure Web App (Container)
 on:
   push:
     branches:
-      - main  # or your default branch
+      - staging # or your default branch
 
 jobs:
   build-and-deploy:
