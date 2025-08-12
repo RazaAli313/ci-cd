@@ -1,78 +1,45 @@
-name: CD Pipeline to Google Cloud Run (staging and production)
+name: CD Pipeline to Azure Web App for Containers
+
 on:
   push:
     branches:
       - staging
-  workflow_dispatch: {}
-  release:
-    types: published
+      - main
+  workflow_dispatch:
 
 env:
   PORT: 5001
-  IMAGE: ${{vars.IMAGE}}:${{github.sha}}
+  IMAGE_NAME: mynodeapp # change to your app name
+
 jobs:
-  test:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    name: Setup, test, and build project
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Test application
-        run: npm test
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    name: Setup project, Authorize GitHub Actions to GCP and Docker Hub, and deploy
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Authenticate for GCP
-        id: gcp-auth
-        uses: google-github-actions/auth@v0
+      - name: Log in to Azure
+        uses: azure/login@v1
         with:
-          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v0
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}
+          username: ${{ secrets.AZURE_REGISTRY_USERNAME }}
+          password: ${{ secrets.AZURE_REGISTRY_PASSWORD }}
 
-      - name: Authenticate for Docker Hub
-        id: docker-auth
-        env:
-          D_USER: ${{secrets.DOCKER_USER}}
-          D_PASS: ${{secrets.DOCKER_PASSWORD}}
+      - name: Build Docker Image
         run: |
-          docker login -u $D_USER -p $D_PASS
-      - name: Build and tag Image
+          docker build -t ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+      - name: Push Docker Image to ACR
         run: |
-          docker build -t ${{env.IMAGE}} .
-      - name: Push the image to Docker hub
-        run: |
-          docker push ${{env.IMAGE}}
-      - name: Enable the Billing API
-        run: |
-          gcloud services enable cloudbilling.googleapis.com --project=${{secrets.GCP_PROJECT_ID}}
-      - name: Deploy to GCP Run - Production environment (If a new release was published from the master branch)
-        if: github.event_name == 'release' && github.event.action == 'published' && github.event.release.target_commitish == 'main'
-        run: |
-          gcloud run deploy ${{vars.GCR_PROJECT_NAME}} \
-          --region ${{vars.GCR_REGION}} \
-          --image ${{env.IMAGE}} \
-          --platform "managed" \
-          --allow-unauthenticated \
-          --tag production \
-      - name: Deploy to GCP Run - Staging environment
-        if: github.ref != 'refs/heads/main'
-        run: |
-          echo "Deploying to staging environment"
-          # Deploy service with to staging environment
-          gcloud run deploy ${{vars.GCR_STAGING_PROJECT_NAME}} \
-          --region ${{vars.GCR_REGION}} \
-          --image ${{env.IMAGE}} \
-          --platform "managed" \
-          --allow-unauthenticated \
-          --tag staging \
+          docker push ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Deploy to Azure Web App for Containers
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          images: ${{ secrets.AZURE_REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
